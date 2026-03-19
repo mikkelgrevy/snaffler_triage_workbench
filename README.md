@@ -2,11 +2,12 @@
 
 A lightning-fast, interactive Terminal User Interface (TUI) designed to parse, filter, and triage [Snaffler](https://github.com/SnaffCon/Snaffler) logs. 
 
-Instead of scrolling through thousands of lines of raw text, this workbench categorizes high-value targets and allows analysts to rapidly tag true/false positives, automatically generating a clean, sorted CSV report for clients or management.
+**What is Triage in this context?**
+In cybersecurity, triage is the process of rapidly sorting massive amounts of data to separate the signal (real, exploitable secrets) from the noise (false positives or test accounts). Instead of manually scrolling through thousands of lines of raw text, this workbench categorizes high-value targets and allows analysts to rapidly tag findings, automatically generating a clean, sorted CSV report for clients or the Red Team.
 
 ## Features
 
-* **Interactive TUI:** Built entirely with Python's standard `curses` library. No `pip install` required.
+* **Interactive TUI:** Built entirely with Python's standard `curses` library. 
 * **Smart Categorization:** Automatically groups findings into 5 actionable tabs:
   1. Credentials & Passwords
   2. SSH & Private Keys
@@ -21,12 +22,18 @@ Instead of scrolling through thousands of lines of raw text, this workbench cate
 ## Requirements
 
 * Python 3.x
-* A Unix-like terminal (Linux, macOS, or Windows WSL)
-* No external dependencies (uses built-in `re`, `curses`, `csv`, `os`, `sys`)
+* Works natively on Linux, macOS, WSL, and standard Windows.
 
-## Usage
+## Installation & Usage
 
-Run the script and pass your raw Snaffler log file as the argument:
-
+**For Linux / macOS / WSL:**
+Runs right out of the box with zero dependencies.
 ```bash
 python3 snaffler_check.py path/to/snaffler_log.txt
+```
+
+**For Native Windows (PowerShell / CMD):**
+```
+pip install windows-curses
+python snaffler_check.py path\to\snaffler_log.txt
+```
