@@ -1,18 +1,17 @@
 import re, sys, curses, textwrap, csv, os
 
 CATEGORIES = {
-    "1": ("CREDS", r"(?:password|pwd|secret|key|token|credential|bind_dn|connectionstring)[\s:=]+[^\s,\]]+"),
-    "2": ("KEYS", r"[^\s]+\.(?:pem|ppk|pfx|p12|ssh-rk)"),
-    "3": ("INFRA", r"[^\s]+\.(?:exe|kdbx|vmdk|vhdx|backup|deploy|setup)"),
+    "1": ("CREDS", r"(?:password|pwd|secret|key|token|credential|bind_dn|connectionstring)[\s:=]+[^\s,\]]+|AKIA[A-Z0-9]{16}"),
+    "2": ("KEYS", r"[^\s]+\.(?:pem|ppk|pfx|p12|pkcs12|ssh-rk|der)"),
+    "3": ("INFRA", r"[^\s]+\.(?:exe|kdbx|vmdk|vhdx|backup|deploy|setup|dmp)"),
     "4": ("CONF", r"[^\s]+\.(?:config|xml|json|yml|yaml|ini|env)"),
-    "5": ("RED", r".*\{Red\}.*")
+    "5": ("MISC RED", r".*\{Red\}.*")
 }
 
 triage_db = {}
 CSV_FILE = ""
 
 def extract_filepath(log_line):
-    # Snaffler usually puts paths in parentheses or brackets near the end
     match = re.search(r'\((\\\\[^\)]+|[A-Za-z]:\\[^\)]+)\)', log_line)
     if match: return match.group(1)
     return "Unknown Path"
@@ -20,19 +19,34 @@ def extract_filepath(log_line):
 def init_csv_state():
     if os.path.exists(CSV_FILE):
         with open(CSV_FILE, 'r', encoding='utf-8') as f:
-            # Using semicolon for Excel compatibility
             reader = csv.DictReader(f, delimiter=';')
             for row in reader:
                 triage_db[row['match']] = {'status': row['status'], 'full': row['full'], 'path': row.get('path', '')}
 
-def load_tab(log_path, pattern):
+def load_tab(log_path, cat_id):
     tab_matches = []
     seen = set()
+    main_pattern = CATEGORIES[cat_id][1]
+    
+    # Pre-compile patterns for tabs 1-4 so we can exclude them from tab 5
+    other_patterns = [re.compile(CATEGORIES[str(i)][1], re.IGNORECASE) for i in range(1, 5)]
+    
     try:
         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
                 line_text = line.strip()
-                match = re.search(pattern, line_text, re.IGNORECASE)
+                
+                if "{red}" not in line_text.lower():
+                    continue 
+                
+                # --- NEW EXCLUSION LOGIC ---
+                # If we are loading Tab 5, skip the line if it already matches Tabs 1-4
+                if cat_id == "5":
+                    if any(p.search(line_text) for p in other_patterns):
+                        continue
+                # ---------------------------
+                
+                match = re.search(main_pattern, line_text, re.IGNORECASE)
                 if match:
                     match_key = match.group(0).lower()
                     if match_key not in triage_db:
@@ -46,19 +60,28 @@ def load_tab(log_path, pattern):
     except: return []
 
 def perform_save(log_path):
-    # Ensure unseen categories are loaded into the DB before saving
+    other_patterns = [re.compile(CATEGORIES[str(i)][1], re.IGNORECASE) for i in range(1, 5)]
+    
     for cat_id, (_, pattern) in CATEGORIES.items():
         try:
             with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
                 for line in f:
-                    match = re.search(pattern, line.strip(), re.IGNORECASE)
+                    line_text = line.strip()
+                    if "{red}" not in line_text.lower():
+                        continue 
+                    
+                    # Ensure the saved CSV also respects the Tab 5 exclusion rule
+                    if cat_id == "5":
+                        if any(p.search(line_text) for p in other_patterns):
+                            continue
+                    
+                    match = re.search(pattern, line_text, re.IGNORECASE)
                     if match:
                         m_key = match.group(0).lower()
                         if m_key not in triage_db:
-                            triage_db[m_key] = {'status': 'NEW', 'full': line.strip(), 'path': extract_filepath(line.strip())}
+                            triage_db[m_key] = {'status': 'NEW', 'full': line_text, 'path': extract_filepath(line_text)}
         except: pass
 
-    # Sort logic: POS first, then NEG, then NEW
     def sort_key(item):
         status = item[1]['status']
         if status == 'POS': return 0
@@ -78,11 +101,12 @@ def draw_gui(stdscr, log_file):
         curses.start_color()
         curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK) 
         curses.init_pair(2, curses.COLOR_RED, curses.COLOR_BLACK)   
+        curses.init_pair(3, curses.COLOR_YELLOW, curses.COLOR_BLACK) 
     
     curses.curs_set(0)
     current_cat = "1"
     
-    active_keys = load_tab(log_file, CATEGORIES[current_cat][1])
+    active_keys = load_tab(log_file, current_cat)
     filtered_keys = active_keys
     search_query = ""
     idx = 0
@@ -119,9 +143,22 @@ def draw_gui(stdscr, log_file):
         
         if filtered_keys:
             current_full = triage_db[filtered_keys[idx]]['full']
+            match_str = filtered_keys[idx]
             wrapped = textwrap.wrap(current_full, width=w-4)
+            
             for j, line in enumerate(wrapped[:5]):
-                if footer_y + 3 + j < h: stdscr.addstr(footer_y + 3 + j, 2, line, curses.A_DIM)
+                if footer_y + 3 + j < h:
+                    parts = re.split(f"({re.escape(match_str)})", line, flags=re.IGNORECASE)
+                    
+                    x_pos = 2
+                    for part in parts:
+                        if not part: continue
+                        
+                        if part.lower() == match_str.lower():
+                            stdscr.addstr(footer_y + 3 + j, x_pos, part, curses.color_pair(3) | curses.A_BOLD)
+                        else:
+                            stdscr.addstr(footer_y + 3 + j, x_pos, part, curses.A_DIM)
+                        x_pos += len(part)
 
         stdscr.refresh()
         ch = stdscr.getch()
@@ -129,7 +166,7 @@ def draw_gui(stdscr, log_file):
         if ch == ord('q'): break
         elif ch in [ord(str(i)) for i in range(1, 6)]:
             current_cat = chr(ch)
-            active_keys = load_tab(log_file, CATEGORIES[current_cat][1])
+            active_keys = load_tab(log_file, current_cat)
             filtered_keys = active_keys
             idx = 0; search_query = ""
         elif ch == curses.KEY_UP and idx > 0: idx -= 1
@@ -162,7 +199,6 @@ def main():
     global CSV_FILE
     log_file_name = sys.argv[1]
     
-    # Strip the original extension (.txt) and append _triage.csv
     base_name = os.path.splitext(log_file_name)[0]
     CSV_FILE = f"{base_name}_triage.csv"
     
