@@ -11,6 +11,9 @@ CATEGORIES = {
 triage_db = {}
 CSV_FILE = ""
 
+# Global state for active severity filters. Defaults to just Red.
+active_severities = {"{red}"}
+
 def extract_filepath(log_line):
     match = re.search(r'\((\\\\[^\)]+|[A-Za-z]:\\[^\)]+)\)', log_line)
     if match: return match.group(1)
@@ -28,23 +31,22 @@ def load_tab(log_path, cat_id):
     seen = set()
     main_pattern = CATEGORIES[cat_id][1]
     
-    # Pre-compile patterns for tabs 1-4 so we can exclude them from tab 5
     other_patterns = [re.compile(CATEGORIES[str(i)][1], re.IGNORECASE) for i in range(1, 5)]
     
     try:
         with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
                 line_text = line.strip()
+                line_lower = line_text.lower()
                 
-                if "{red}" not in line_text.lower():
+                # --- DYNAMIC SEVERITY FILTER ---
+                if not active_severities or not any(sev in line_lower for sev in active_severities):
                     continue 
+                # -------------------------------
                 
-                # --- NEW EXCLUSION LOGIC ---
-                # If we are loading Tab 5, skip the line if it already matches Tabs 1-4
                 if cat_id == "5":
                     if any(p.search(line_text) for p in other_patterns):
                         continue
-                # ---------------------------
                 
                 match = re.search(main_pattern, line_text, re.IGNORECASE)
                 if match:
@@ -67,10 +69,11 @@ def perform_save(log_path):
             with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
                 for line in f:
                     line_text = line.strip()
-                    if "{red}" not in line_text.lower():
+                    line_lower = line_text.lower()
+                    
+                    if not active_severities or not any(sev in line_lower for sev in active_severities):
                         continue 
                     
-                    # Ensure the saved CSV also respects the Tab 5 exclusion rule
                     if cat_id == "5":
                         if any(p.search(line_text) for p in other_patterns):
                             continue
@@ -97,6 +100,7 @@ def perform_save(log_path):
             writer.writerow({'status': data['status'], 'match': match_key, 'path': data['path'], 'full': data['full']})
 
 def draw_gui(stdscr, log_file):
+    global active_severities
     if curses.has_colors():
         curses.start_color()
         curses.init_pair(1, curses.COLOR_GREEN, curses.COLOR_BLACK) 
@@ -115,8 +119,12 @@ def draw_gui(stdscr, log_file):
         stdscr.clear()
         h, w = stdscr.getmaxyx()
         
+        # Format the active filters for the header
+        sev_str = ",".join([s.strip("{}").upper() for s in active_severities]) if active_severities else "NONE"
+        header_text = f" [{CATEGORIES[current_cat][0]}] | {len(filtered_keys)} Items | Filters: [{sev_str}] | Search: '{search_query}' "
+        
         stdscr.attron(curses.A_REVERSE)
-        stdscr.addstr(0, 0, f" [{CATEGORIES[current_cat][0]}] | {len(filtered_keys)} Items | Search: '{search_query}' ".ljust(w))
+        stdscr.addstr(0, 0, header_text.ljust(w)[:w])
         stdscr.attroff(curses.A_REVERSE)
 
         list_h = h - 12
@@ -139,7 +147,8 @@ def draw_gui(stdscr, log_file):
 
         footer_y = h - 8
         stdscr.addstr(footer_y, 0, "═"*w)
-        stdscr.addstr(footer_y + 1, 2, "1-5:Tabs | ENTER:Pos | BACKSPACE:Neg | s:Save | /:Search | q:Quit", curses.A_BOLD)
+        # Updated footer text to include the r/y/g/b keys
+        stdscr.addstr(footer_y + 1, 2, "1-5:Tabs | EN:Pos | BS:Neg | r/y/g/b:Tog | s:Save | /:Search | q:Quit", curses.A_BOLD)
         
         if filtered_keys:
             current_full = triage_db[filtered_keys[idx]]['full']
@@ -176,6 +185,22 @@ def draw_gui(stdscr, log_file):
             if filtered_keys: triage_db[filtered_keys[idx]]['status'] = 'POS'
         elif ch in [8, 127, curses.KEY_BACKSPACE]: 
             if filtered_keys: triage_db[filtered_keys[idx]]['status'] = 'NEG'
+            
+        # --- NEW TOGGLE LOGIC ---
+        elif ch in [ord('r'), ord('y'), ord('g'), ord('b')]:
+            color_map = {'r': '{red}', 'y': '{yellow}', 'g': '{green}', 'b': '{black}'}
+            toggled_color = color_map[chr(ch)]
+            
+            if toggled_color in active_severities:
+                active_severities.remove(toggled_color)
+            else:
+                active_severities.add(toggled_color)
+                
+            # Reload the current tab with the new filter
+            active_keys = load_tab(log_file, current_cat)
+            filtered_keys = active_keys
+            idx = 0; search_query = ""
+        # ------------------------
             
         elif ch == ord('s'): 
             stdscr.addstr(h-1, 2, "SAVING... PLEASE WAIT", curses.A_BOLD); stdscr.refresh()
